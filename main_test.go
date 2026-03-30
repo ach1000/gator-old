@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -147,8 +149,25 @@ func TestHandlerRegister(t *testing.T) {
 	store := &mockStore{users: map[string]database.User{}}
 	s := &state{cfg: cfg, db: store}
 
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe error: %v", err)
+	}
+	os.Stdout = w
+
 	if err := handlerRegister(s, command{name: "register", args: []string{"lane"}}); err != nil {
+		w.Close()
+		os.Stdout = oldStdout
 		t.Fatalf("handlerRegister error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	if !bytes.Contains(buf.Bytes(), []byte("created user: lane")) {
+		t.Fatalf("expected output to mention created user, got %q", buf.String())
 	}
 
 	if _, ok := store.users["lane"]; !ok {
@@ -221,7 +240,28 @@ func TestHandlerUsers(t *testing.T) {
 	store := &mockStore{users: map[string]database.User{"lane": {Name: "lane"}, "allan": {Name: "allan"}, "hunter": {Name: "hunter"}}}
 	s := &state{cfg: cfg, db: store}
 
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe error: %v", err)
+	}
+	os.Stdout = w
+
 	if err := handlerUsers(s, command{name: "users"}); err != nil {
+		w.Close()
+		os.Stdout = oldStdout
 		t.Fatalf("handlerUsers error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+	if !bytes.Contains(buf.Bytes(), []byte("* allan (current)")) {
+		t.Fatalf("expected current marker in users output, got %q", out)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("* lane")) || !bytes.Contains(buf.Bytes(), []byte("* hunter")) {
+		t.Fatalf("expected all users listed, got %q", out)
 	}
 }
