@@ -40,6 +40,16 @@ func (m *mockStore) DeleteUsers(_ context.Context) error {
 	return nil
 }
 
+func (m *mockStore) GetUsers(_ context.Context) ([]database.User, error) {
+	users := make([]database.User, 0, len(m.users))
+	for _, u := range m.users {
+		users = append(users, u)
+	}
+	// Sort to match SQL order by name if necessary in non-mock.
+	// We will rely on map iteration ambiguity not affecting structural expectations for now.
+	return users, nil
+}
+
 func TestCommandsRegisterAndRun(t *testing.T) {
 	cmds := &commands{}
 	received := false
@@ -182,5 +192,36 @@ func TestHandlerReset(t *testing.T) {
 
 	if len(store.users) != 0 {
 		t.Fatalf("expected no users after reset, got %d", len(store.users))
+	}
+}
+
+func TestHandlerUsers(t *testing.T) {
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+
+	tmp := t.TempDir()
+	if err := os.Setenv("HOME", tmp); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfgPath := filepath.Join(tmp, ".gatorconfig.json")
+	data := []byte(`{
+  "db_url": "sqlite://mydb",
+  "current_user_name": "allan"
+}`)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("failed write initial config: %v", err)
+	}
+
+	cfg, err := config.Read()
+	if err != nil {
+		t.Fatalf("config.Read error: %v", err)
+	}
+
+	store := &mockStore{users: map[string]database.User{"lane": {Name: "lane"}, "allan": {Name: "allan"}, "hunter": {Name: "hunter"}}}
+	s := &state{cfg: cfg, db: store}
+
+	if err := handlerUsers(s, command{name: "users"}); err != nil {
+		t.Fatalf("handlerUsers error: %v", err)
 	}
 }
