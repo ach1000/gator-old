@@ -23,6 +23,7 @@ type state struct {
 type UserStore interface {
 	GetUser(context.Context, string) (database.User, error)
 	CreateUser(context.Context, database.CreateUserParams) (database.User, error)
+	DeleteUsers(context.Context) error
 }
 
 type command struct {
@@ -111,6 +112,19 @@ func handlerRegister(s *state, cmd command) error {
 	return nil
 }
 
+func handlerReset(s *state, _ command) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	if err := s.db.DeleteUsers(context.Background()); err != nil {
+		return err
+	}
+
+	fmt.Println("database reset: all users deleted")
+	return nil
+}
+
 func main() {
 	cfg, err := config.Read()
 	if err != nil {
@@ -133,6 +147,7 @@ func main() {
 	cmds := &commands{}
 	cmds.register("login", handlerLogin)
 	cmds.register("register", handlerRegister)
+	cmds.register("reset", handlerReset)
 
 	args := os.Args
 	if len(args) < 2 {

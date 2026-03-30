@@ -35,6 +35,11 @@ func (m *mockStore) CreateUser(_ context.Context, params database.CreateUserPara
 	return user, nil
 }
 
+func (m *mockStore) DeleteUsers(_ context.Context) error {
+	m.users = map[string]database.User{}
+	return nil
+}
+
 func TestCommandsRegisterAndRun(t *testing.T) {
 	cmds := &commands{}
 	received := false
@@ -142,5 +147,40 @@ func TestHandlerRegister(t *testing.T) {
 
 	if err := handlerRegister(s, command{name: "register", args: []string{"lane"}}); err == nil {
 		t.Fatal("expected error on duplicate user")
+	}
+}
+
+func TestHandlerReset(t *testing.T) {
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+
+	tmp := t.TempDir()
+	if err := os.Setenv("HOME", tmp); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfgPath := filepath.Join(tmp, ".gatorconfig.json")
+	data := []byte(`{
+  "db_url": "sqlite://mydb",
+  "current_user_name": ""
+}`)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("failed write initial config: %v", err)
+	}
+
+	cfg, err := config.Read()
+	if err != nil {
+		t.Fatalf("config.Read error: %v", err)
+	}
+
+	store := &mockStore{users: map[string]database.User{"a": {Name: "a"}, "b": {Name: "b"}}}
+	s := &state{cfg: cfg, db: store}
+
+	if err := handlerReset(s, command{name: "reset"}); err != nil {
+		t.Fatalf("handlerReset error: %v", err)
+	}
+
+	if len(store.users) != 0 {
+		t.Fatalf("expected no users after reset, got %d", len(store.users))
 	}
 }
