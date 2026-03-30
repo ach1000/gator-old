@@ -1,15 +1,28 @@
 package main
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/ach1000/gator/internal/config"
+	"github.com/ach1000/gator/internal/database"
+	"github.com/google/uuid"
+	_ "github.com/lib/pq"
 )
 
 type state struct {
 	cfg *config.Config
+	db  UserStore
+}
+
+type UserStore interface {
+	GetUser(context.Context, string) (database.User, error)
+	CreateUser(context.Context, database.CreateUserParams) (database.User, error)
 }
 
 type command struct {
@@ -40,13 +53,61 @@ func handlerLogin(s *state, cmd command) error {
 	if len(cmd.args) == 0 {
 		return fmt.Errorf("username required")
 	}
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
 
 	username := cmd.args[0]
+	_, err := s.db.GetUser(context.Background(), username)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("user %q does not exist", username)
+		}
+		return err
+	}
+
 	if err := s.cfg.SetUser(username); err != nil {
 		return err
 	}
 
 	fmt.Printf("current user set to %s\n", username)
+	return nil
+}
+
+func handlerRegister(s *state, cmd command) error {
+	if len(cmd.args) == 0 {
+		return fmt.Errorf("username required")
+	}
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+
+	name := cmd.args[0]
+	_, err := s.db.GetUser(context.Background(), name)
+	if err == nil {
+		return fmt.Errorf("user %q already exists", name)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	now := time.Now().UTC()
+	user, err := s.db.CreateUser(context.Background(), database.CreateUserParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Name:      name,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := s.cfg.SetUser(name); err != nil {
+		return err
+	}
+
+	fmt.Printf("created user: %s\n", name)
+	log.Printf("user data: %#v\n", user)
 	return nil
 }
 
@@ -56,9 +117,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s := &state{cfg: cfg}
+	if cfg.DBUrl == "" {
+		log.Fatal("db_url is not configured in config file")
+	}
+
+	sqlDB, err := sql.Open("postgres", cfg.DBUrl)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dbQueries := database.New(sqlDB)
+
+	s := &state{cfg: cfg, db: dbQueries}
 	cmds := &commands{}
 	cmds.register("login", handlerLogin)
+	cmds.register("register", handlerRegister)
 
 	args := os.Args
 	if len(args) < 2 {
