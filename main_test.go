@@ -14,10 +14,12 @@ import (
 
 	"github.com/ach1000/gator/internal/config"
 	"github.com/ach1000/gator/internal/database"
+	"github.com/google/uuid"
 )
 
 type mockStore struct {
 	users map[string]database.User
+	feeds map[string]database.Feed
 }
 
 func (m *mockStore) GetUser(_ context.Context, name string) (database.User, error) {
@@ -37,6 +39,18 @@ func (m *mockStore) CreateUser(_ context.Context, params database.CreateUserPara
 	user := database.User{ID: params.ID, CreatedAt: params.CreatedAt, UpdatedAt: params.UpdatedAt, Name: params.Name}
 	m.users[params.Name] = user
 	return user, nil
+}
+
+func (m *mockStore) CreateFeed(_ context.Context, params database.CreateFeedParams) (database.Feed, error) {
+	if m.feeds == nil {
+		m.feeds = map[string]database.Feed{}
+	}
+	if _, exists := m.feeds[params.Url]; exists {
+		return database.Feed{}, fmt.Errorf("feed url already exists")
+	}
+	feed := database.Feed{ID: params.ID, CreatedAt: params.CreatedAt, UpdatedAt: params.UpdatedAt, Name: params.Name, Url: params.Url, UserID: params.UserID}
+	m.feeds[params.Url] = feed
+	return feed, nil
 }
 
 func (m *mockStore) DeleteUsers(_ context.Context) error {
@@ -266,6 +280,45 @@ func TestHandlerUsers(t *testing.T) {
 	}
 	if !bytes.Contains(buf.Bytes(), []byte("* lane")) || !bytes.Contains(buf.Bytes(), []byte("* hunter")) {
 		t.Fatalf("expected all users listed, got %q", out)
+	}
+}
+
+func TestHandlerAddFeed(t *testing.T) {
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+
+	tmp := t.TempDir()
+	if err := os.Setenv("HOME", tmp); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfgPath := filepath.Join(tmp, ".gatorconfig.json")
+	data := []byte(`{
+  "db_url": "sqlite://mydb",
+  "current_user_name": "alice"
+}`)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("failed write initial config: %v", err)
+	}
+
+	cfg, err := config.Read()
+	if err != nil {
+		t.Fatalf("config.Read error: %v", err)
+	}
+
+	store := &mockStore{users: map[string]database.User{"alice": {ID: uuid.New(), Name: "alice"}}}
+	s := &state{cfg: cfg, db: store}
+
+	if err := handlerAddFeed(s, command{name: "addfeed", args: []string{"The Boot.dev Blog", "https://blog.boot.dev/rss"}}); err != nil {
+		t.Fatalf("handlerAddFeed error: %v", err)
+	}
+
+	feed, ok := store.feeds["https://blog.boot.dev/rss"]
+	if !ok {
+		t.Fatal("expected feed to be stored")
+	}
+	if feed.Name != "The Boot.dev Blog" || feed.UserID != store.users["alice"].ID {
+		t.Fatalf("unexpected feed data: %+v", feed)
 	}
 }
 

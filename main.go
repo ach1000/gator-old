@@ -24,6 +24,7 @@ type UserStore interface {
 	GetUser(context.Context, string) (database.User, error)
 	GetUsers(context.Context) ([]database.User, error)
 	CreateUser(context.Context, database.CreateUserParams) (database.User, error)
+	CreateFeed(context.Context, database.CreateFeedParams) (database.Feed, error)
 	DeleteUsers(context.Context) error
 }
 
@@ -148,6 +149,42 @@ func handlerUsers(s *state, _ command) error {
 	return nil
 }
 
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.args) < 2 {
+		return fmt.Errorf("name and url required")
+	}
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if s.cfg.CurrentUserName == "" {
+		return fmt.Errorf("no current user set")
+	}
+
+	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+	if err != nil {
+		return err
+	}
+
+	feedName := cmd.args[0]
+	feedURL := cmd.args[1]
+	now := time.Now().UTC()
+
+	feed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Name:      feedName,
+		Url:       feedURL,
+		UserID:    user.ID,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("created feed: %+v\n", feed)
+	return nil
+}
+
 func main() {
 	cfg, err := config.Read()
 	if err != nil {
@@ -172,6 +209,7 @@ func main() {
 	cmds.register("register", handlerRegister)
 	cmds.register("reset", handlerReset)
 	cmds.register("users", handlerUsers)
+	cmds.register("addfeed", handlerAddFeed)
 	cmds.register("agg", handlerAgg)
 
 	args := os.Args
