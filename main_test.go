@@ -53,6 +53,29 @@ func (m *mockStore) CreateFeed(_ context.Context, params database.CreateFeedPara
 	return feed, nil
 }
 
+func (m *mockStore) GetAllFeeds(_ context.Context) ([]database.GetAllFeedsRow, error) {
+	rows := make([]database.GetAllFeedsRow, 0, len(m.feeds))
+	for _, feed := range m.feeds {
+		userName := ""
+		for _, user := range m.users {
+			if user.ID == feed.UserID {
+				userName = user.Name
+				break
+			}
+		}
+		rows = append(rows, database.GetAllFeedsRow{
+			ID:        feed.ID,
+			CreatedAt: feed.CreatedAt,
+			UpdatedAt: feed.UpdatedAt,
+			Name:      feed.Name,
+			Url:       feed.Url,
+			UserID:    feed.UserID,
+			UserName:  userName,
+		})
+	}
+	return rows, nil
+}
+
 func (m *mockStore) DeleteUsers(_ context.Context) error {
 	m.users = map[string]database.User{}
 	return nil
@@ -319,6 +342,73 @@ func TestHandlerAddFeed(t *testing.T) {
 	}
 	if feed.Name != "The Boot.dev Blog" || feed.UserID != store.users["alice"].ID {
 		t.Fatalf("unexpected feed data: %+v", feed)
+	}
+}
+
+func TestHandlerFeeds(t *testing.T) {
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+
+	tmp := t.TempDir()
+	if err := os.Setenv("HOME", tmp); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfgPath := filepath.Join(tmp, ".gatorconfig.json")
+	data := []byte(`{
+  "db_url": "sqlite://mydb",
+  "current_user_name": ""
+}`)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("failed write initial config: %v", err)
+	}
+
+	cfg, err := config.Read()
+	if err != nil {
+		t.Fatalf("config.Read error: %v", err)
+	}
+
+	alice := database.User{ID: uuid.New(), Name: "alice"}
+	store := &mockStore{
+		users: map[string]database.User{"alice": alice},
+		feeds: map[string]database.Feed{
+			"https://blog.boot.dev/rss": {
+				ID:     uuid.New(),
+				Name:   "The Boot.dev Blog",
+				Url:    "https://blog.boot.dev/rss",
+				UserID: alice.ID,
+			},
+		},
+	}
+	s := &state{cfg: cfg, db: store}
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe error: %v", err)
+	}
+	os.Stdout = w
+
+	if err := handlerFeeds(s, command{name: "feeds"}); err != nil {
+		w.Close()
+		os.Stdout = oldStdout
+		t.Fatalf("handlerFeeds error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	if !bytes.Contains(buf.Bytes(), []byte("The Boot.dev Blog")) {
+		t.Fatalf("expected feed name in output, got %q", out)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("alice")) {
+		t.Fatalf("expected user name in output, got %q", out)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("https://blog.boot.dev/rss")) {
+		t.Fatalf("expected feed URL in output, got %q", out)
 	}
 }
 
