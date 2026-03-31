@@ -16,8 +16,9 @@ import (
 )
 
 type state struct {
-	cfg *config.Config
-	db  UserStore
+	cfg  *config.Config
+	db   UserStore
+	cmds *commands
 }
 
 type UserStore interface {
@@ -35,14 +36,17 @@ type command struct {
 }
 
 type commands struct {
-	handlers map[string]func(*state, command) error
+	handlers     map[string]func(*state, command) error
+	descriptions map[string]string
 }
 
-func (c *commands) register(name string, f func(*state, command) error) {
+func (c *commands) register(name string, description string, f func(*state, command) error) {
 	if c.handlers == nil {
 		c.handlers = make(map[string]func(*state, command) error)
+		c.descriptions = make(map[string]string)
 	}
 	c.handlers[name] = f
+	c.descriptions[name] = description
 }
 
 func (c *commands) run(s *state, cmd command) error {
@@ -150,6 +154,17 @@ func handlerUsers(s *state, _ command) error {
 	return nil
 }
 
+func handlerHelp(s *state, _ command) error {
+	if s.cmds == nil {
+		return fmt.Errorf("commands registry not initialized")
+	}
+	fmt.Println("Available commands:")
+	for name, desc := range s.cmds.descriptions {
+		fmt.Printf("  %-15s %s\n", name, desc)
+	}
+	return nil
+}
+
 func handlerAddFeed(s *state, cmd command) error {
 	if len(cmd.args) < 2 {
 		return fmt.Errorf("name and url required")
@@ -221,15 +236,17 @@ func main() {
 
 	dbQueries := database.New(sqlDB)
 
-	s := &state{cfg: cfg, db: dbQueries}
 	cmds := &commands{}
-	cmds.register("login", handlerLogin)
-	cmds.register("register", handlerRegister)
-	cmds.register("reset", handlerReset)
-	cmds.register("users", handlerUsers)
-	cmds.register("addfeed", handlerAddFeed)
-	cmds.register("feeds", handlerFeeds)
-	cmds.register("agg", handlerAgg)
+	cmds.register("help", "Show available commands", handlerHelp)
+	cmds.register("login", "Set the current user", handlerLogin)
+	cmds.register("register", "Create a new user", handlerRegister)
+	cmds.register("reset", "Delete all users and feeds", handlerReset)
+	cmds.register("users", "List all users", handlerUsers)
+	cmds.register("addfeed", "Add a feed for the current user", handlerAddFeed)
+	cmds.register("feeds", "List all feeds with usernames", handlerFeeds)
+	cmds.register("agg", "Fetch RSS feed from wagslane.dev", handlerAgg)
+
+	s := &state{cfg: cfg, db: dbQueries, cmds: cmds}
 
 	args := os.Args
 	if len(args) < 2 {
@@ -243,4 +260,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-

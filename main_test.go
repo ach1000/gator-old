@@ -94,7 +94,7 @@ func (m *mockStore) GetUsers(_ context.Context) ([]database.User, error) {
 func TestCommandsRegisterAndRun(t *testing.T) {
 	cmds := &commands{}
 	received := false
-	cmds.register("test", func(s *state, cmd command) error {
+	cmds.register("test", "test command", func(s *state, cmd command) error {
 		received = true
 		return nil
 	})
@@ -459,4 +459,3 @@ func TestFetchFeed(t *testing.T) {
 		t.Fatalf("unexpected second item description: %q", feed.Channel.Item[1].Description)
 	}
 }
-
