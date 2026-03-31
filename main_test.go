@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -258,6 +260,7 @@ func TestHandlerUsers(t *testing.T) {
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
 	out := buf.String()
+
 	if !bytes.Contains(buf.Bytes(), []byte("* allan (current)")) {
 		t.Fatalf("expected current marker in users output, got %q", out)
 	}
@@ -265,3 +268,52 @@ func TestHandlerUsers(t *testing.T) {
 		t.Fatalf("expected all users listed, got %q", out)
 	}
 }
+
+func TestFetchFeed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test &amp; Feed</title>
+    <link>https://example.com</link>
+    <description>Sample &lt;RSS&gt; feed</description>
+    <item>
+      <title>Article &amp; One</title>
+      <link>https://example.com/article1</link>
+      <description>First &quot;entry&quot;</description>
+      <pubDate>Mon, 06 Sep 2021 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Article &amp; Two</title>
+      <link>https://example.com/article2</link>
+      <description>Second &lt;entry&gt;</description>
+      <pubDate>Tue, 07 Sep 2021 14:30:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`))
+	}))
+	defer srv.Close()
+
+	feed, err := fetchFeed(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("fetchFeed error: %v", err)
+	}
+
+	if feed.Channel.Title != "Test & Feed" {
+		t.Fatalf("unexpected channel title: %q", feed.Channel.Title)
+	}
+	if feed.Channel.Description != "Sample <RSS> feed" {
+		t.Fatalf("unexpected channel description: %q", feed.Channel.Description)
+	}
+	if len(feed.Channel.Item) != 2 {
+		t.Fatalf("unexpected item count: %d", len(feed.Channel.Item))
+	}
+	if feed.Channel.Item[0].Title != "Article & One" {
+		t.Fatalf("unexpected first item title: %q", feed.Channel.Item[0].Title)
+	}
+	if feed.Channel.Item[1].Description != "Second <entry>" {
+		t.Fatalf("unexpected second item description: %q", feed.Channel.Item[1].Description)
+	}
+}
+
