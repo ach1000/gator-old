@@ -391,10 +391,11 @@ func TestHandlerAddFeed(t *testing.T) {
 		t.Fatalf("config.Read error: %v", err)
 	}
 
-	store := &mockStore{users: map[string]database.User{"alice": {ID: uuid.New(), Name: "alice"}}}
+	alice := database.User{ID: uuid.New(), Name: "alice"}
+	store := &mockStore{users: map[string]database.User{"alice": alice}}
 	s := &state{cfg: cfg, db: store}
 
-	if err := handlerAddFeed(s, command{name: "addfeed", args: []string{"The Boot.dev Blog", "https://blog.boot.dev/rss"}}); err != nil {
+	if err := handlerAddFeed(s, command{name: "addfeed", args: []string{"The Boot.dev Blog", "https://blog.boot.dev/rss"}}, alice); err != nil {
 		t.Fatalf("handlerAddFeed error: %v", err)
 	}
 
@@ -569,7 +570,7 @@ func TestHandlerFollow(t *testing.T) {
 	}
 	os.Stdout = w
 
-	if err := handlerFollow(s, command{name: "follow", args: []string{feedURL}}); err != nil {
+	if err := handlerFollow(s, command{name: "follow", args: []string{feedURL}}, alice); err != nil {
 		w.Close()
 		os.Stdout = oldStdout
 		t.Fatalf("handlerFollow error: %v", err)
@@ -597,19 +598,12 @@ func TestHandlerFollow(t *testing.T) {
 	}
 
 	// Test error: follow non-existent feed
-	if err := handlerFollow(s, command{name: "follow", args: []string{"https://nonexistent.com/rss"}}); err == nil {
+	if err := handlerFollow(s, command{name: "follow", args: []string{"https://nonexistent.com/rss"}}, alice); err == nil {
 		t.Fatal("expected error when following non-existent feed")
 	}
 
-	// Test error: no current user
-	s.cfg.CurrentUserName = ""
-	if err := handlerFollow(s, command{name: "follow", args: []string{feedURL}}); err == nil {
-		t.Fatal("expected error when no current user set")
-	}
-
 	// Test error: no URL provided
-	s.cfg.CurrentUserName = "alice"
-	if err := handlerFollow(s, command{name: "follow", args: []string{}}); err == nil {
+	if err := handlerFollow(s, command{name: "follow", args: []string{}}, alice); err == nil {
 		t.Fatal("expected error when no URL provided")
 	}
 }
@@ -685,7 +679,7 @@ func TestHandlerFollowing(t *testing.T) {
 	}
 	os.Stdout = w
 
-	if err := handlerFollowing(s, command{name: "following"}); err != nil {
+	if err := handlerFollowing(s, command{name: "following"}, alice); err != nil {
 		w.Close()
 		os.Stdout = oldStdout
 		t.Fatalf("handlerFollowing error: %v", err)
@@ -741,7 +735,7 @@ func TestHandlerFollowingEmpty(t *testing.T) {
 	}
 	os.Stdout = w
 
-	if err := handlerFollowing(s, command{name: "following"}); err != nil {
+	if err := handlerFollowing(s, command{name: "following"}, alice); err != nil {
 		w.Close()
 		os.Stdout = oldStdout
 		t.Fatalf("handlerFollowing error: %v", err)

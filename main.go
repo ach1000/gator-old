@@ -168,20 +168,27 @@ func handlerHelp(s *state, _ command) error {
 	return nil
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func middlewareLoggedIn(handler func(*state, command, database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		if s.cfg.CurrentUserName == "" {
+			return fmt.Errorf("no current user set")
+		}
+		if s.db == nil {
+			return fmt.Errorf("database not initialized")
+		}
+
+		user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+		if err != nil {
+			return err
+		}
+
+		return handler(s, cmd, user)
+	}
+}
+
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.args) < 2 {
 		return fmt.Errorf("name and url required")
-	}
-	if s.db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	if s.cfg.CurrentUserName == "" {
-		return fmt.Errorf("no current user set")
-	}
-
-	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
-	if err != nil {
-		return err
 	}
 
 	feedName := cmd.args[0]
@@ -233,15 +240,9 @@ func handlerFeeds(s *state, _ command) error {
 	return nil
 }
 
-func handlerFollow(s *state, cmd command) error {
+func handlerFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.args) == 0 {
 		return fmt.Errorf("url required")
-	}
-	if s.db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	if s.cfg.CurrentUserName == "" {
-		return fmt.Errorf("no current user set")
 	}
 
 	feedURL := cmd.args[0]
@@ -251,11 +252,6 @@ func handlerFollow(s *state, cmd command) error {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("feed with url %q does not exist", feedURL)
 		}
-		return err
-	}
-
-	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
-	if err != nil {
 		return err
 	}
 
@@ -275,19 +271,7 @@ func handlerFollow(s *state, cmd command) error {
 	return nil
 }
 
-func handlerFollowing(s *state, _ command) error {
-	if s.db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	if s.cfg.CurrentUserName == "" {
-		return fmt.Errorf("no current user set")
-	}
-
-	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
-	if err != nil {
-		return err
-	}
-
+func handlerFollowing(s *state, _ command, user database.User) error {
 	follows, err := s.db.GetFeedFollowsForUser(context.Background(), user.ID)
 	if err != nil {
 		return err
@@ -329,10 +313,10 @@ func main() {
 	cmds.register("register", "Create a new user", handlerRegister)
 	cmds.register("reset", "Delete all users and feeds", handlerReset)
 	cmds.register("users", "List all users", handlerUsers)
-	cmds.register("addfeed", "Add a feed for the current user", handlerAddFeed)
+	cmds.register("addfeed", "Add a feed for the current user", middlewareLoggedIn(handlerAddFeed))
 	cmds.register("feeds", "List all feeds with usernames", handlerFeeds)
-	cmds.register("follow", "Follow a feed by URL", handlerFollow)
-	cmds.register("following", "List all feeds the current user is following", handlerFollowing)
+	cmds.register("follow", "Follow a feed by URL", middlewareLoggedIn(handlerFollow))
+	cmds.register("following", "List all feeds the current user is following", middlewareLoggedIn(handlerFollowing))
 	cmds.register("agg", "Fetch RSS feed from wagslane.dev", handlerAgg)
 
 	s := &state{cfg: cfg, db: dbQueries, cmds: cmds}
