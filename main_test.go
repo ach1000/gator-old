@@ -521,3 +521,272 @@ func TestFetchFeed(t *testing.T) {
 		t.Fatalf("unexpected second item description: %q", feed.Channel.Item[1].Description)
 	}
 }
+
+func TestHandlerFollow(t *testing.T) {
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+
+	tmp := t.TempDir()
+	if err := os.Setenv("HOME", tmp); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfgPath := filepath.Join(tmp, ".gatorconfig.json")
+	data := []byte(`{
+  "db_url": "sqlite://mydb",
+  "current_user_name": "alice"
+}`)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("failed write initial config: %v", err)
+	}
+
+	cfg, err := config.Read()
+	if err != nil {
+		t.Fatalf("config.Read error: %v", err)
+	}
+
+	alice := database.User{ID: uuid.New(), Name: "alice"}
+	bob := database.User{ID: uuid.New(), Name: "bob"}
+	feedURL := "https://blog.boot.dev/rss"
+
+	store := &mockStore{
+		users: map[string]database.User{"alice": alice, "bob": bob},
+		feeds: map[string]database.Feed{
+			feedURL: {
+				ID:     uuid.New(),
+				Name:   "The Boot.dev Blog",
+				Url:    feedURL,
+				UserID: bob.ID,
+			},
+		},
+	}
+	s := &state{cfg: cfg, db: store}
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe error: %v", err)
+	}
+	os.Stdout = w
+
+	if err := handlerFollow(s, command{name: "follow", args: []string{feedURL}}); err != nil {
+		w.Close()
+		os.Stdout = oldStdout
+		t.Fatalf("handlerFollow error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	if !bytes.Contains(buf.Bytes(), []byte("Now following")) {
+		t.Fatalf("expected 'Now following' in output, got %q", out)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("The Boot.dev Blog")) {
+		t.Fatalf("expected feed name in output, got %q", out)
+	}
+
+	// Verify the follow was recorded
+	if len(store.follows) != 1 {
+		t.Fatalf("expected 1 follow, got %d", len(store.follows))
+	}
+	if store.follows[0].UserID != alice.ID || store.follows[0].FeedID != store.feeds[feedURL].ID {
+		t.Fatalf("unexpected follow data: %+v", store.follows[0])
+	}
+
+	// Test error: follow non-existent feed
+	if err := handlerFollow(s, command{name: "follow", args: []string{"https://nonexistent.com/rss"}}); err == nil {
+		t.Fatal("expected error when following non-existent feed")
+	}
+
+	// Test error: no current user
+	s.cfg.CurrentUserName = ""
+	if err := handlerFollow(s, command{name: "follow", args: []string{feedURL}}); err == nil {
+		t.Fatal("expected error when no current user set")
+	}
+
+	// Test error: no URL provided
+	s.cfg.CurrentUserName = "alice"
+	if err := handlerFollow(s, command{name: "follow", args: []string{}}); err == nil {
+		t.Fatal("expected error when no URL provided")
+	}
+}
+
+func TestHandlerFollowing(t *testing.T) {
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+
+	tmp := t.TempDir()
+	if err := os.Setenv("HOME", tmp); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfgPath := filepath.Join(tmp, ".gatorconfig.json")
+	data := []byte(`{
+  "db_url": "sqlite://mydb",
+  "current_user_name": "alice"
+}`)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("failed write initial config: %v", err)
+	}
+
+	cfg, err := config.Read()
+	if err != nil {
+		t.Fatalf("config.Read error: %v", err)
+	}
+
+	alice := database.User{ID: uuid.New(), Name: "alice"}
+	bob := database.User{ID: uuid.New(), Name: "bob"}
+
+	feed1ID := uuid.New()
+	feed2ID := uuid.New()
+
+	store := &mockStore{
+		users: map[string]database.User{"alice": alice, "bob": bob},
+		feeds: map[string]database.Feed{
+			"https://blog.boot.dev/rss": {
+				ID:     feed1ID,
+				Name:   "The Boot.dev Blog",
+				Url:    "https://blog.boot.dev/rss",
+				UserID: bob.ID,
+			},
+			"https://example.com/rss": {
+				ID:     feed2ID,
+				Name:   "Example Feed",
+				Url:    "https://example.com/rss",
+				UserID: bob.ID,
+			},
+		},
+		follows: []database.GetFeedFollowsForUserRow{
+			{
+				ID:       uuid.New(),
+				UserID:   alice.ID,
+				FeedID:   feed1ID,
+				FeedName: "The Boot.dev Blog",
+				UserName: "alice",
+			},
+			{
+				ID:       uuid.New(),
+				UserID:   alice.ID,
+				FeedID:   feed2ID,
+				FeedName: "Example Feed",
+				UserName: "alice",
+			},
+		},
+	}
+	s := &state{cfg: cfg, db: store}
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe error: %v", err)
+	}
+	os.Stdout = w
+
+	if err := handlerFollowing(s, command{name: "following"}); err != nil {
+		w.Close()
+		os.Stdout = oldStdout
+		t.Fatalf("handlerFollowing error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	if !bytes.Contains(buf.Bytes(), []byte("The Boot.dev Blog")) {
+		t.Fatalf("expected first feed in output, got %q", out)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("Example Feed")) {
+		t.Fatalf("expected second feed in output, got %q", out)
+	}
+}
+
+func TestHandlerFollowingEmpty(t *testing.T) {
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+
+	tmp := t.TempDir()
+	if err := os.Setenv("HOME", tmp); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfgPath := filepath.Join(tmp, ".gatorconfig.json")
+	data := []byte(`{
+  "db_url": "sqlite://mydb",
+  "current_user_name": "alice"
+}`)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfg, err := config.Read()
+	if err != nil {
+		t.Fatalf("config.Read error: %v", err)
+	}
+
+	alice := database.User{ID: uuid.New(), Name: "alice"}
+	store := &mockStore{
+		users: map[string]database.User{"alice": alice},
+	}
+	s := &state{cfg: cfg, db: store}
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe error: %v", err)
+	}
+	os.Stdout = w
+
+	if err := handlerFollowing(s, command{name: "following"}); err != nil {
+		w.Close()
+		os.Stdout = oldStdout
+		t.Fatalf("handlerFollowing error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	if !bytes.Contains(buf.Bytes(), []byte("No feeds are being followed")) {
+		t.Fatalf("expected 'No feeds are being followed' message, got %q", out)
+	}
+}
+
+func TestHandlerHelp(t *testing.T) {
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe error: %v", err)
+	}
+	os.Stdout = w
+
+	cmds := &commands{}
+	cmds.register("test1", "Test command 1", func(s *state, cmd command) error { return nil })
+	cmds.register("test2", "Test command 2", func(s *state, cmd command) error { return nil })
+
+	s := &state{cmds: cmds}
+	if err := handlerHelp(s, command{name: "help"}); err != nil {
+		w.Close()
+		os.Stdout = oldStdout
+		t.Fatalf("handlerHelp error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	if !bytes.Contains(buf.Bytes(), []byte("Available commands:")) {
+		t.Fatalf("expected 'Available commands:' in output, got %q", out)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("test1")) || !bytes.Contains(buf.Bytes(), []byte("test2")) {
+		t.Fatalf("expected command names in output, got %q", out)
+	}
+}
