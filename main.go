@@ -30,6 +30,7 @@ type UserStore interface {
 	CreateFeedFollow(context.Context, database.CreateFeedFollowParams) (database.CreateFeedFollowRow, error)
 	GetFeedByURL(context.Context, string) (database.Feed, error)
 	GetFeedFollowsForUser(context.Context, uuid.UUID) ([]database.GetFeedFollowsForUserRow, error)
+	DeleteFeedFollow(context.Context, database.DeleteFeedFollowParams) error
 	DeleteUsers(context.Context) error
 }
 
@@ -289,6 +290,33 @@ func handlerFollowing(s *state, _ command, user database.User) error {
 	return nil
 }
 
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.args) == 0 {
+		return fmt.Errorf("url required")
+	}
+
+	feedURL := cmd.args[0]
+
+	feed, err := s.db.GetFeedByURL(context.Background(), feedURL)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("feed with url %q does not exist", feedURL)
+		}
+		return err
+	}
+
+	err = s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{
+		UserID: user.ID,
+		FeedID: feed.ID,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Unfollowed %s\n", feed.Name)
+	return nil
+}
+
 func main() {
 	cfg, err := config.Read()
 	if err != nil {
@@ -317,6 +345,7 @@ func main() {
 	cmds.register("feeds", "List all feeds with usernames", handlerFeeds)
 	cmds.register("follow", "Follow a feed by URL", middlewareLoggedIn(handlerFollow))
 	cmds.register("following", "List all feeds the current user is following", middlewareLoggedIn(handlerFollowing))
+	cmds.register("unfollow", "Unfollow a feed by URL", middlewareLoggedIn(handlerUnfollow))
 	cmds.register("agg", "Fetch RSS feed from wagslane.dev", handlerAgg)
 
 	s := &state{cfg: cfg, db: dbQueries, cmds: cmds}

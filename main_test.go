@@ -153,6 +153,16 @@ func (m *mockStore) GetFeedFollowsForUser(_ context.Context, userID uuid.UUID) (
 	return result, nil
 }
 
+func (m *mockStore) DeleteFeedFollow(_ context.Context, params database.DeleteFeedFollowParams) error {
+	for i, follow := range m.follows {
+		if follow.UserID == params.UserID && follow.FeedID == params.FeedID {
+			m.follows = append(m.follows[:i], m.follows[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("feed follow not found")
+}
+
 func TestCommandsRegisterAndRun(t *testing.T) {
 	cmds := &commands{}
 	received := false
@@ -749,6 +759,98 @@ func TestHandlerFollowingEmpty(t *testing.T) {
 
 	if !bytes.Contains(buf.Bytes(), []byte("No feeds are being followed")) {
 		t.Fatalf("expected 'No feeds are being followed' message, got %q", out)
+	}
+}
+
+func TestHandlerUnfollow(t *testing.T) {
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+
+	tmp := t.TempDir()
+	if err := os.Setenv("HOME", tmp); err != nil {
+		t.Fatalf("failed set HOME: %v", err)
+	}
+
+	cfgPath := filepath.Join(tmp, ".gatorconfig.json")
+	data := []byte(`{
+  "db_url": "sqlite://mydb",
+  "current_user_name": "alice"
+}`)
+	if err := os.WriteFile(cfgPath, data, 0644); err != nil {
+		t.Fatalf("failed write initial config: %v", err)
+	}
+
+	cfg, err := config.Read()
+	if err != nil {
+		t.Fatalf("config.Read error: %v", err)
+	}
+
+	alice := database.User{ID: uuid.New(), Name: "alice"}
+	bob := database.User{ID: uuid.New(), Name: "bob"}
+	feedURL := "https://blog.boot.dev/rss"
+	feedID := uuid.New()
+
+	store := &mockStore{
+		users: map[string]database.User{"alice": alice, "bob": bob},
+		feeds: map[string]database.Feed{
+			feedURL: {
+				ID:     feedID,
+				Name:   "The Boot.dev Blog",
+				Url:    feedURL,
+				UserID: bob.ID,
+			},
+		},
+		follows: []database.GetFeedFollowsForUserRow{
+			{
+				ID:       uuid.New(),
+				UserID:   alice.ID,
+				FeedID:   feedID,
+				FeedName: "The Boot.dev Blog",
+				UserName: "alice",
+			},
+		},
+	}
+	s := &state{cfg: cfg, db: store}
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe error: %v", err)
+	}
+	os.Stdout = w
+
+	if err := handlerUnfollow(s, command{name: "unfollow", args: []string{feedURL}}, alice); err != nil {
+		w.Close()
+		os.Stdout = oldStdout
+		t.Fatalf("handlerUnfollow error: %v", err)
+	}
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	out := buf.String()
+
+	if !bytes.Contains(buf.Bytes(), []byte("Unfollowed")) {
+		t.Fatalf("expected 'Unfollowed' in output, got %q", out)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("The Boot.dev Blog")) {
+		t.Fatalf("expected feed name in output, got %q", out)
+	}
+
+	// Verify the follow was removed
+	if len(store.follows) != 0 {
+		t.Fatalf("expected 0 follows after unfollow, got %d", len(store.follows))
+	}
+
+	// Test error: unfollow non-existent feed
+	if err := handlerUnfollow(s, command{name: "unfollow", args: []string{"https://nonexistent.com/rss"}}, alice); err == nil {
+		t.Fatal("expected error when unfollowing non-existent feed")
+	}
+
+	// Test error: no URL provided
+	if err := handlerUnfollow(s, command{name: "unfollow", args: []string{}}, alice); err == nil {
+		t.Fatal("expected error when no URL provided")
 	}
 }
 
