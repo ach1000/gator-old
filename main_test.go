@@ -18,8 +18,9 @@ import (
 )
 
 type mockStore struct {
-	users map[string]database.User
-	feeds map[string]database.Feed
+	users   map[string]database.User
+	feeds   map[string]database.Feed
+	follows []database.GetFeedFollowsForUserRow
 }
 
 func (m *mockStore) GetUser(_ context.Context, name string) (database.User, error) {
@@ -89,6 +90,67 @@ func (m *mockStore) GetUsers(_ context.Context) ([]database.User, error) {
 	// Sort to match SQL order by name if necessary in non-mock.
 	// We will rely on map iteration ambiguity not affecting structural expectations for now.
 	return users, nil
+}
+
+func (m *mockStore) GetFeedByURL(_ context.Context, url string) (database.Feed, error) {
+	if f, ok := m.feeds[url]; ok {
+		return f, nil
+	}
+	return database.Feed{}, sql.ErrNoRows
+}
+
+func (m *mockStore) CreateFeedFollow(_ context.Context, params database.CreateFeedFollowParams) (database.CreateFeedFollowRow, error) {
+	if m.follows == nil {
+		m.follows = []database.GetFeedFollowsForUserRow{}
+	}
+
+	// Find the feed and user names
+	var feedName, userName string
+	for _, feed := range m.feeds {
+		if feed.ID == params.FeedID {
+			feedName = feed.Name
+			break
+		}
+	}
+	for _, user := range m.users {
+		if user.ID == params.UserID {
+			userName = user.Name
+			break
+		}
+	}
+
+	result := database.CreateFeedFollowRow{
+		ID:        params.ID,
+		CreatedAt: params.CreatedAt,
+		UpdatedAt: params.UpdatedAt,
+		UserID:    params.UserID,
+		FeedID:    params.FeedID,
+		FeedName:  feedName,
+		UserName:  userName,
+	}
+
+	// Also add to follows list
+	m.follows = append(m.follows, database.GetFeedFollowsForUserRow{
+		ID:        params.ID,
+		CreatedAt: params.CreatedAt,
+		UpdatedAt: params.UpdatedAt,
+		UserID:    params.UserID,
+		FeedID:    params.FeedID,
+		FeedName:  feedName,
+		UserName:  userName,
+	})
+
+	return result, nil
+}
+
+func (m *mockStore) GetFeedFollowsForUser(_ context.Context, userID uuid.UUID) ([]database.GetFeedFollowsForUserRow, error) {
+	result := make([]database.GetFeedFollowsForUserRow, 0)
+	for _, follow := range m.follows {
+		if follow.UserID == userID {
+			result = append(result, follow)
+		}
+	}
+	return result, nil
 }
 
 func TestCommandsRegisterAndRun(t *testing.T) {

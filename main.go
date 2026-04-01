@@ -27,6 +27,9 @@ type UserStore interface {
 	CreateUser(context.Context, database.CreateUserParams) (database.User, error)
 	CreateFeed(context.Context, database.CreateFeedParams) (database.Feed, error)
 	GetAllFeeds(context.Context) ([]database.GetAllFeedsRow, error)
+	CreateFeedFollow(context.Context, database.CreateFeedFollowParams) (database.CreateFeedFollowRow, error)
+	GetFeedByURL(context.Context, string) (database.Feed, error)
+	GetFeedFollowsForUser(context.Context, uuid.UUID) ([]database.GetFeedFollowsForUserRow, error)
 	DeleteUsers(context.Context) error
 }
 
@@ -197,6 +200,18 @@ func handlerAddFeed(s *state, cmd command) error {
 		return err
 	}
 
+	// Automatically create a feed follow for the current user
+	_, err = s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		UserID:    user.ID,
+		FeedID:    feed.ID,
+	})
+	if err != nil {
+		return err
+	}
+
 	fmt.Printf("created feed: %+v\n", feed)
 	return nil
 }
@@ -213,6 +228,78 @@ func handlerFeeds(s *state, _ command) error {
 
 	for _, feed := range feeds {
 		fmt.Printf("* %s (by %s) - %s\n", feed.Name, feed.UserName, feed.Url)
+	}
+
+	return nil
+}
+
+func handlerFollow(s *state, cmd command) error {
+	if len(cmd.args) == 0 {
+		return fmt.Errorf("url required")
+	}
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if s.cfg.CurrentUserName == "" {
+		return fmt.Errorf("no current user set")
+	}
+
+	feedURL := cmd.args[0]
+
+	feed, err := s.db.GetFeedByURL(context.Background(), feedURL)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("feed with url %q does not exist", feedURL)
+		}
+		return err
+	}
+
+	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	followRow, err := s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		ID:        uuid.New(),
+		CreatedAt: now,
+		UpdatedAt: now,
+		UserID:    user.ID,
+		FeedID:    feed.ID,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Now following %s (by %s)\n", followRow.FeedName, followRow.UserName)
+	return nil
+}
+
+func handlerFollowing(s *state, _ command) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if s.cfg.CurrentUserName == "" {
+		return fmt.Errorf("no current user set")
+	}
+
+	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+	if err != nil {
+		return err
+	}
+
+	follows, err := s.db.GetFeedFollowsForUser(context.Background(), user.ID)
+	if err != nil {
+		return err
+	}
+
+	if len(follows) == 0 {
+		fmt.Println("No feeds are being followed")
+		return nil
+	}
+
+	for _, follow := range follows {
+		fmt.Printf("* %s\n", follow.FeedName)
 	}
 
 	return nil
@@ -244,6 +331,8 @@ func main() {
 	cmds.register("users", "List all users", handlerUsers)
 	cmds.register("addfeed", "Add a feed for the current user", handlerAddFeed)
 	cmds.register("feeds", "List all feeds with usernames", handlerFeeds)
+	cmds.register("follow", "Follow a feed by URL", handlerFollow)
+	cmds.register("following", "List all feeds the current user is following", handlerFollowing)
 	cmds.register("agg", "Fetch RSS feed from wagslane.dev", handlerAgg)
 
 	s := &state{cfg: cfg, db: dbQueries, cmds: cmds}
