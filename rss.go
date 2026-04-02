@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"html"
 	"io"
 	"net/http"
+	"time"
+
+	"github.com/ach1000/gator/internal/database"
 )
 
 type RSSFeed struct {
@@ -64,12 +68,57 @@ func fetchFeed(ctx context.Context, feedURL string) (*RSSFeed, error) {
 	return &feed, nil
 }
 
-func handlerAgg(s *state, _ command) error {
-	feed, err := fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
+func scrapeFeeds(s *state) error {
+	nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("%+v\n", feed)
+	fmt.Printf("Fetching feed: %s\n", nextFeed.Url)
+
+	rssFeed, err := fetchFeed(context.Background(), nextFeed.Url)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range rssFeed.Channel.Item {
+		fmt.Printf(" * %s\n", item.Title)
+	}
+
+	now := time.Now().UTC()
+	err = s.db.MarkFeedFetched(context.Background(), database.MarkFeedFetchedParams{
+		LastFetchedAt: sql.NullTime{Time: now, Valid: true},
+		ID:            nextFeed.ID,
+	})
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+	if len(cmd.args) == 0 {
+		return fmt.Errorf("time_between_reqs required")
+	}
+
+	timeBetweenRequestsStr := cmd.args[0]
+	timeBetweenRequests, err := time.ParseDuration(timeBetweenRequestsStr)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Collecting feeds every %v\n", timeBetweenRequests)
+
+	ticker := time.NewTicker(timeBetweenRequests)
+	defer ticker.Stop()
+
+	for {
+		err := scrapeFeeds(s)
+		if err != nil {
+			fmt.Printf("Error scraping feeds: %v\n", err)
+		}
+
+		<-ticker.C
+	}
 }

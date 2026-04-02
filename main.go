@@ -25,13 +25,15 @@ type UserStore interface {
 	GetUser(context.Context, string) (database.User, error)
 	GetUsers(context.Context) ([]database.User, error)
 	CreateUser(context.Context, database.CreateUserParams) (database.User, error)
-	CreateFeed(context.Context, database.CreateFeedParams) (database.Feed, error)
+	CreateFeed(context.Context, database.CreateFeedParams) (database.CreateFeedRow, error)
 	GetAllFeeds(context.Context) ([]database.GetAllFeedsRow, error)
 	CreateFeedFollow(context.Context, database.CreateFeedFollowParams) (database.CreateFeedFollowRow, error)
-	GetFeedByURL(context.Context, string) (database.Feed, error)
+	GetFeedByURL(context.Context, string) (database.GetFeedByURLRow, error)
 	GetFeedFollowsForUser(context.Context, uuid.UUID) ([]database.GetFeedFollowsForUserRow, error)
 	DeleteFeedFollow(context.Context, database.DeleteFeedFollowParams) error
 	DeleteUsers(context.Context) error
+	GetNextFeedToFetch(context.Context) (database.Feed, error)
+	MarkFeedFetched(context.Context, database.MarkFeedFetchedParams) error
 }
 
 type command struct {
@@ -346,7 +348,7 @@ func main() {
 	cmds.register("follow", "Follow a feed by URL", middlewareLoggedIn(handlerFollow))
 	cmds.register("following", "List all feeds the current user is following", middlewareLoggedIn(handlerFollowing))
 	cmds.register("unfollow", "Unfollow a feed by URL", middlewareLoggedIn(handlerUnfollow))
-	cmds.register("agg", "Fetch RSS feed from wagslane.dev", handlerAgg)
+	cmds.register("agg", "Aggregate RSS feeds in a loop with time interval (e.g., 1m, 1h)", handlerAgg)
 
 	s := &state{cfg: cfg, db: dbQueries, cmds: cmds}
 
