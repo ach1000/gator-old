@@ -104,7 +104,7 @@ func handlerRegister(s *state, cmd command) error {
 	if err == nil {
 		return fmt.Errorf("user %q already exists", name)
 	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 
