@@ -42,16 +42,16 @@ func (m *mockStore) CreateUser(_ context.Context, params database.CreateUserPara
 	return user, nil
 }
 
-func (m *mockStore) CreateFeed(_ context.Context, params database.CreateFeedParams) (database.Feed, error) {
+func (m *mockStore) CreateFeed(_ context.Context, params database.CreateFeedParams) (database.CreateFeedRow, error) {
 	if m.feeds == nil {
 		m.feeds = map[string]database.Feed{}
 	}
 	if _, exists := m.feeds[params.Url]; exists {
-		return database.Feed{}, fmt.Errorf("feed url already exists")
+		return database.CreateFeedRow{}, fmt.Errorf("feed url already exists")
 	}
 	feed := database.Feed{ID: params.ID, CreatedAt: params.CreatedAt, UpdatedAt: params.UpdatedAt, Name: params.Name, Url: params.Url, UserID: params.UserID}
 	m.feeds[params.Url] = feed
-	return feed, nil
+	return database.CreateFeedRow{ID: params.ID, CreatedAt: params.CreatedAt, UpdatedAt: params.UpdatedAt, Name: params.Name, Url: params.Url, UserID: params.UserID}, nil
 }
 
 func (m *mockStore) GetAllFeeds(_ context.Context) ([]database.GetAllFeedsRow, error) {
@@ -92,11 +92,11 @@ func (m *mockStore) GetUsers(_ context.Context) ([]database.User, error) {
 	return users, nil
 }
 
-func (m *mockStore) GetFeedByURL(_ context.Context, url string) (database.Feed, error) {
+func (m *mockStore) GetFeedByURL(_ context.Context, url string) (database.GetFeedByURLRow, error) {
 	if f, ok := m.feeds[url]; ok {
-		return f, nil
+		return database.GetFeedByURLRow{ID: f.ID, CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt, Name: f.Name, Url: f.Url, UserID: f.UserID}, nil
 	}
-	return database.Feed{}, sql.ErrNoRows
+	return database.GetFeedByURLRow{}, sql.ErrNoRows
 }
 
 func (m *mockStore) CreateFeedFollow(_ context.Context, params database.CreateFeedFollowParams) (database.CreateFeedFollowRow, error) {
@@ -161,6 +161,36 @@ func (m *mockStore) DeleteFeedFollow(_ context.Context, params database.DeleteFe
 		}
 	}
 	return fmt.Errorf("feed follow not found")
+}
+
+func (m *mockStore) GetNextFeedToFetch(_ context.Context) (database.Feed, error) {
+	if len(m.feeds) == 0 {
+		return database.Feed{}, sql.ErrNoRows
+	}
+	// Return the first unfetched feed (LastFetchedAt is nil/null)
+	// If all are fetched, return the oldest one
+	var nextFeed database.Feed
+	var found bool
+	for _, feed := range m.feeds {
+		if !found || (feed.LastFetchedAt.Valid == false && nextFeed.LastFetchedAt.Valid == true) ||
+			(feed.LastFetchedAt.Valid == true && nextFeed.LastFetchedAt.Valid == true && feed.LastFetchedAt.Time.Before(nextFeed.LastFetchedAt.Time)) {
+			nextFeed = feed
+			found = true
+		}
+	}
+	return nextFeed, nil
+}
+
+func (m *mockStore) MarkFeedFetched(_ context.Context, params database.MarkFeedFetchedParams) error {
+	for url, feed := range m.feeds {
+		if feed.ID == params.ID {
+			feed.LastFetchedAt = params.LastFetchedAt
+			feed.UpdatedAt = params.LastFetchedAt.Time
+			m.feeds[url] = feed
+			return nil
+		}
+	}
+	return sql.ErrNoRows
 }
 
 func TestCommandsRegisterAndRun(t *testing.T) {

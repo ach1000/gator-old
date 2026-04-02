@@ -101,13 +101,13 @@ type state struct {
 
 **`GetNextFeedToFetch :one`** (Added April 2026)
 - Returns the next feed that should be fetched
-- Orders by: `last_fetched_at ASC NULLS FIRST`
-- This means:
-  - Feeds with NULL `last_fetched_at` come first (never fetched)
-  - Among those, unfetched feeds are fetched first
-  - Then feeds are fetched in order of oldest `last_fetched_at`
-- LIMIT 1 to get just one feed
-- Returns `database.Feed` struct
+- Query: `ORDER BY last_fetched_at ASC NULLS FIRST LIMIT 1`
+- Feed selection priority:
+  1. **Unfetched feeds first**: Any feed with NULL `last_fetched_at` (never fetched)
+  2. **Then by age**: Among fetched feeds, oldest `last_fetched_at` first
+  3. **Single result**: LIMIT 1 returns only one feed per call
+- Returns `database.Feed` struct with all columns including `last_fetched_at`
+- Strategy prevents any single feed from starving others in the rotation
 
 **`MarkFeedFetched :exec`** (Added April 2026)
 - Takes feed ID and timestamp
@@ -141,6 +141,12 @@ sqlc generate
    - `users.sql.go` - User-related queries
 4. **Update UserStore interface** in `main.go` to match generated signatures
 5. **Use in handlers** via `s.db.QueryName(...)`
+
+**Return Types Note**: sqlc generates specific row types for queries:
+- `:one` queries return named row types: `CreateFeedRow`, `GetFeedByURLRow`, etc.
+- `:many` queries return slices of row types or model types
+- `:exec` queries return just an error
+- The base models (`Feed`, `User`, `FeedFollow`) are in `models.go`
 
 **Important**: Generated code is auto-created. Do NOT edit it manually. Always edit the `.sql` files and regenerate.
 
@@ -186,6 +192,15 @@ cmds.register("cmdname", "desc", middlewareLoggedIn(handlerFunction))
 
 ## How to Test Changes
 
+### Unit Tests
+The test file (`main_test.go`) uses a `mockStore` struct that implements the complete `UserStore` interface:
+- Stores users, feeds, and follows in memory (maps and slices)
+- Implements all database methods including `GetNextFeedToFetch` and `MarkFeedFetched`
+- `GetNextFeedToFetch` mock returns unfetched feeds first (NULL `last_fetched_at`), then oldest
+- `MarkFeedFetched` mock updates feed timestamps
+- Run all tests: `go test -v`
+
+### Integration Testing
 1. **Add feeds** (if needed):
    ```bash
    ./gator login testuser
@@ -198,12 +213,7 @@ cmds.register("cmdname", "desc", middlewareLoggedIn(handlerFunction))
    # Or press Ctrl+C manually
    ```
 
-3. **Run unit tests**:
-   ```bash
-   go test ./...
-   ```
-
-4. **Check database state**:
+3. **Check database state**:
    ```bash
    psql -U postgres -d gator -c "SELECT id, name, url, last_fetched_at FROM feeds;"
    ```
@@ -246,3 +256,6 @@ cmds.register("cmdname", "desc", middlewareLoggedIn(handlerFunction))
 - Tested with Hacker News RSS feed and Boot.dev blog
 - Confirmed proper feed rotation with NULLS FIRST ordering
 - Verified ticker loop works with 3-second, 5-second, and 10-second intervals
+- All 14 unit tests passing with mockStore implementation
+- mockStore correctly implements GetNextFeedToFetch and MarkFeedFetched
+- Tested feed selection logic: unfetched feeds prioritized, then oldest first
