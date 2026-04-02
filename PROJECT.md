@@ -64,14 +64,20 @@ type state struct {
 - Unescapes HTML entities in titles and descriptions
 - Returns parsed feed or error if fetch/parse fails
 
-**`scrapeFeeds(s *state) error`** (Added in April 2026)
-- Core aggregation function
+**`scrapeFeeds(s *state) error`** (Updated April 2026 to save posts)
+- Core aggregation function that fetches feeds and stores posts
 - Flow:
   1. Gets next feed to fetch from DB using `GetNextFeedToFetch()`
   2. Fetches the feed via `fetchFeed()`
-  3. Prints feed URL and all item titles to console
+  3. **For each post item**:
+     - Prints title to console for monitoring
+     - Parses `published_at` time (tries RFC1123Z format, falls back to alternative)
+     - Creates database post record via `CreatePost()`
+     - Handles duplicate URL constraint gracefully (continues on error)
+     - Logs other errors but continues fetching remaining items
   4. Marks feed as fetched via `MarkFeedFetched()` with current timestamp
 - Handles errors gracefully (prints but doesn't crash the loop)
+- **Date Parsing**: Tries RFC1123Z format first, then alternative format. If both fail, `published_at` is NULL
 
 **`handlerAgg(s *state, cmd command) error`** (Updated April 2026)
 - Command handler for `agg` CLI command
@@ -90,12 +96,21 @@ type state struct {
 - `users` - User accounts
 - `feeds` - RSS feed URLs and metadata
 - `feed_follows` - Many-to-many relationship (user follows feed)
+- `posts` - Individual RSS post items (added April 2026)
 
-**Key Column** (`feeds` table):
-- `last_fetched_at` (TIMESTAMP, nullable) - When feed was last fetched
+**Key Columns**:
+- `feeds.last_fetched_at` (TIMESTAMP, nullable) - When feed was last fetched
   - NULL initially (never fetched)
   - Set to current time when marked as fetched
   - Used to determine feed fetch order
+- `posts` table columns:
+  - `id` (UUID) - Unique post identifier
+  - `created_at`, `updated_at` - Record metadata
+  - `title` (TEXT) - Post title
+  - `url` (TEXT UNIQUE) - Post URL, must be unique (prevents duplicates)
+  - `description` (TEXT, nullable) - Post description/body
+  - `published_at` (TIMESTAMP, nullable) - When post was published (may fail to parse)
+  - `feed_id` (UUID FK) - Reference to the feed this post came from
 
 ### 4. SQL Queries (`sql/queries/feeds.sql`)
 
@@ -114,16 +129,32 @@ type state struct {
 - Sets both `last_fetched_at` and `updated_at` to the provided timestamp
 - Used after successfully scraping a feed
 
+**`CreatePost :one`** (Added April 2026)
+- Inserts a new post into the database
+- Takes all post fields: id, created_at, updated_at, title, url, description, published_at, feed_id
+- URL must be unique (UNIQUE constraint) - duplicate URLs cause constraint violation
+- Handles duplicate detection at application level (caught in scrapeFeeds)
+- Returns the created `Post` record
+
+**`GetPostsForUser :many`** (Added April 2026)
+- Returns posts from feeds the current user follows
+- Query joins posts → feeds → feed_follows to find user's feeds
+- Ordered by `published_at DESC` (most recent first)
+- Takes `UserID` and `Limit` (int32) parameters
+- Returns slice of `Post` records
+- Used by browse command to display recent posts
+
 ## Migration History
 
 1. **001_users.sql** - Creates `users` table (id, created_at, updated_at, name)
 2. **002_feeds.sql** - Creates `feeds` table (id, created_at, updated_at, name, url, user_id FK)
 3. **003_feed_follows.sql** - Creates `feed_follows` junction table (user can follow multiple feeds)
 4. **004_feed_last_fetched.sql** - Adds nullable `last_fetched_at` column to `feeds` table
+5. **005_posts.sql** (Added April 2026) - Creates `posts` table for storing RSS items
 
 **To apply migrations**:
 ```bash
-goose postgres "postgres://user:pass@localhost:5432/dbname" up
+goose -dir sql/schema postgres "postgres://user:pass@localhost:5432/dbname" up
 ```
 
 **After migrations, regenerate sqlc code**:
@@ -167,6 +198,7 @@ cmds.register("commandname", "description", handlerFunction)
 - `following` - List feeds current user follows
 - `unfollow` - Unfollow a feed
 - `agg` - Aggregate feeds (long-running loop)
+- `browse` (Added April 2026) - View recent posts from followed feeds (logged-in only)
 - `help` - Show available commands
 - `reset` - Delete all data
 
@@ -232,15 +264,26 @@ The test file (`main_test.go`) uses a `mockStore` struct that implements the com
 - Current: `ORDER BY last_fetched_at ASC NULLS FIRST`
 - Alternative: Could add feed priority column, randomize, etc.
 
-### Storing posts in database
-- Would need new `posts` table in schema migration
-- New query to insert posts
-- Modify `scrapeFeeds()` to store items instead of just printing
+### Storing posts in database (Completed April 2026)
+- ✅ Created `posts` table in migration 005_posts.sql
+- ✅ Added CreatePost and GetPostsForUser SQL queries
+- ✅ Modified `scrapeFeeds()` to store items with error handling:
+  - Ignores duplicate URL errors (UNIQUE constraint)
+  - Logs other errors but continues
+  - Attempts to parse published_at in multiple formats
+  - Falls back to NULL if date parsing fails
 
-### Adding post filtering/search
-- Need to create `posts` table first
-- Add queries to filter by date, feed, keyword, etc.
-- Create CLI commands to search/display posts
+### Adding post filtering/search (Future enhancement)
+- `posts` table exists now
+- Could add queries to:
+  - Filter by date range
+  - Filter by specific feed
+  - Search by keyword in title/description
+  - Order by different criteria
+- Could create new CLI commands:
+  - `browse-feed <feed-id>` - Posts from specific feed
+  - `search <keyword>` - Find posts by keyword
+  - `posts-since <date>` - Posts since specific date
 
 ## Important Notes for Future Changes
 
@@ -252,10 +295,37 @@ The test file (`main_test.go`) uses a `mockStore` struct that implements the com
 
 ---
 
-**Last verified working**: April 2, 2026
-- Tested with Hacker News RSS feed and Boot.dev blog
-- Confirmed proper feed rotation with NULLS FIRST ordering
-- Verified ticker loop works with 3-second, 5-second, and 10-second intervals
-- All 14 unit tests passing with mockStore implementation
-- mockStore correctly implements GetNextFeedToFetch and MarkFeedFetched
-- Tested feed selection logic: unfetched feeds prioritized, then oldest first
+**Last verified working**: April 2, 2026 - Post Storage & Browse Command
+- ✅ Migration 005_posts.sql created and applied
+- ✅ CreatePost and GetPostsForUser SQL queries working
+- ✅ Posts saved to database with duplicate URL handling
+- ✅ Date parsing handles RFC1123Z format and fallbacks gracefully
+- ✅ browse command displays 2 most recent posts by default
+- ✅ browse command with custom limit (browse 5) works correctly
+- ✅ All 14 unit tests passing with mockStore for posts
+- ✅ mockStore implements CreatePost and GetPostsForUser
+- ✅ Full aggregation pipeline working: fetch → parse dates → save posts → mark feed → display
+- Tested with Boot.dev blog feed (50+ posts saved successfully)
+
+## Browse Command Details (Added April 2026)
+
+**`handlerBrowse(s *state, cmd command, user database.User) error`**
+- Displays recent posts from feeds the user follows
+- **Parameters**:
+  - Optional limit argument (default: 2)
+  - Parses string argument to int32 using `strconv.ParseInt()`
+- **Flow**:
+  1. Parse optional limit parameter (default 2)
+  2. Call `GetPostsForUser()` with user ID and limit
+  3. For each post, display:
+     - Title (emphasized with ===)
+     - Feed ID
+     - URL
+     - Description (if available)
+     - Published timestamp (formatted as RFC1123Z)
+- **Usage**:
+  ```bash
+  ./gator browse           # Shows 2 most recent posts
+  ./gator browse 5        # Shows 5 most recent posts
+  ./gator browse 10       # Shows 10 most recent posts
+  ```

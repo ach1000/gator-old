@@ -1,0 +1,12 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /home/ach/projects/gator && go build$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /home/ach/projects/gator && go test -v$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

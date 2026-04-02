@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ach1000/gator/internal/database"
+	"github.com/google/uuid"
 )
 
 type RSSFeed struct {
@@ -83,6 +84,43 @@ func scrapeFeeds(s *state) error {
 
 	for _, item := range rssFeed.Channel.Item {
 		fmt.Printf(" * %s\n", item.Title)
+
+		// Parse published_at time
+		var publishedAt sql.NullTime
+		pubTime, err := time.Parse(time.RFC1123Z, item.PubDate)
+		if err != nil {
+			// Try alternative format
+			pubTime, err = time.Parse("Mon, 02 Jan 2006 15:04:05 MST", item.PubDate)
+			if err != nil {
+				// If parsing fails, leave as NULL
+				publishedAt = sql.NullTime{Valid: false}
+			} else {
+				publishedAt = sql.NullTime{Time: pubTime, Valid: true}
+			}
+		} else {
+			publishedAt = sql.NullTime{Time: pubTime, Valid: true}
+		}
+
+		now := time.Now().UTC()
+		_, err = s.db.CreatePost(context.Background(), database.CreatePostParams{
+			ID:          uuid.New(),
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Title:       item.Title,
+			Url:         item.Link,
+			Description: sql.NullString{String: item.Description, Valid: item.Description != ""},
+			PublishedAt: publishedAt,
+			FeedID:      nextFeed.ID,
+		})
+		if err != nil {
+			// Check if it's a unique constraint violation (duplicate URL)
+			if err.Error() == "pq: duplicate key value violates unique constraint \"posts_url_key\"" {
+				// Ignore duplicate posts
+				continue
+			}
+			// Log other errors but continue
+			fmt.Printf("Error saving post %q: %v\n", item.Title, err)
+		}
 	}
 
 	now := time.Now().UTC()

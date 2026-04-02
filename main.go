@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/ach1000/gator/internal/config"
@@ -34,6 +35,8 @@ type UserStore interface {
 	DeleteUsers(context.Context) error
 	GetNextFeedToFetch(context.Context) (database.Feed, error)
 	MarkFeedFetched(context.Context, database.MarkFeedFetchedParams) error
+	CreatePost(context.Context, database.CreatePostParams) (database.Post, error)
+	GetPostsForUser(context.Context, database.GetPostsForUserParams) ([]database.Post, error)
 }
 
 type command struct {
@@ -319,6 +322,44 @@ func handlerUnfollow(s *state, cmd command, user database.User) error {
 	return nil
 }
 
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := int32(2)
+	if len(cmd.args) > 0 {
+		parsedLimit, err := strconv.ParseInt(cmd.args[0], 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid limit: %v", err)
+		}
+		limit = int32(parsedLimit)
+	}
+
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  limit,
+	})
+	if err != nil {
+		return err
+	}
+
+	if len(posts) == 0 {
+		fmt.Println("No posts found for your followed feeds")
+		return nil
+	}
+
+	for _, post := range posts {
+		fmt.Printf("\n=== %s ===\n", post.Title)
+		fmt.Printf("Feed: (ID: %s)\n", post.FeedID)
+		fmt.Printf("URL: %s\n", post.Url)
+		if post.Description.Valid {
+			fmt.Printf("Description: %s\n", post.Description.String)
+		}
+		if post.PublishedAt.Valid {
+			fmt.Printf("Published: %s\n", post.PublishedAt.Time.Format(time.RFC1123Z))
+		}
+	}
+
+	return nil
+}
+
 func main() {
 	cfg, err := config.Read()
 	if err != nil {
@@ -348,7 +389,9 @@ func main() {
 	cmds.register("follow", "Follow a feed by URL", middlewareLoggedIn(handlerFollow))
 	cmds.register("following", "List all feeds the current user is following", middlewareLoggedIn(handlerFollowing))
 	cmds.register("unfollow", "Unfollow a feed by URL", middlewareLoggedIn(handlerUnfollow))
+	cmds.register("browse", "Browse posts from your followed feeds (optional limit parameter)", middlewareLoggedIn(handlerBrowse))
 	cmds.register("agg", "Aggregate RSS feeds in a loop with time interval (e.g., 1m, 1h)", handlerAgg)
+	cmds.register("browse", "Display posts for the current user", middlewareLoggedIn(handlerBrowse))
 
 	s := &state{cfg: cfg, db: dbQueries, cmds: cmds}
 

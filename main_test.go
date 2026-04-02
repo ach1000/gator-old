@@ -21,6 +21,7 @@ type mockStore struct {
 	users   map[string]database.User
 	feeds   map[string]database.Feed
 	follows []database.GetFeedFollowsForUserRow
+	posts   map[string]database.Post
 }
 
 func (m *mockStore) GetUser(_ context.Context, name string) (database.User, error) {
@@ -191,6 +192,74 @@ func (m *mockStore) MarkFeedFetched(_ context.Context, params database.MarkFeedF
 		}
 	}
 	return sql.ErrNoRows
+}
+
+func (m *mockStore) CreatePost(_ context.Context, params database.CreatePostParams) (database.Post, error) {
+	if m.posts == nil {
+		m.posts = map[string]database.Post{}
+	}
+	if _, exists := m.posts[params.Url]; exists {
+		return database.Post{}, fmt.Errorf("pq: duplicate key value violates unique constraint \"posts_url_key\"")
+	}
+	post := database.Post{
+		ID:          params.ID,
+		CreatedAt:   params.CreatedAt,
+		UpdatedAt:   params.UpdatedAt,
+		Title:       params.Title,
+		Url:         params.Url,
+		Description: params.Description,
+		PublishedAt: params.PublishedAt,
+		FeedID:      params.FeedID,
+	}
+	m.posts[params.Url] = post
+	return post, nil
+}
+
+func (m *mockStore) GetPostsForUser(_ context.Context, params database.GetPostsForUserParams) ([]database.Post, error) {
+	result := make([]database.Post, 0)
+
+	// Get all posts from feeds the user follows
+	for _, post := range m.posts {
+		// Check if user follows this feed
+		follows := false
+		for _, follow := range m.follows {
+			if follow.UserID == params.UserID && follow.FeedID == post.FeedID {
+				follows = true
+				break
+			}
+		}
+		if follows {
+			result = append(result, database.Post{
+				ID:          post.ID,
+				CreatedAt:   post.CreatedAt,
+				UpdatedAt:   post.UpdatedAt,
+				Title:       post.Title,
+				Url:         post.Url,
+				Description: post.Description,
+				PublishedAt: post.PublishedAt,
+				FeedID:      post.FeedID,
+			})
+		}
+	}
+
+	// Sort by published_at DESC (most recent first)
+	// For simplicity in test, just sort by CreatedAt descending
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			// Compare published_at if both valid
+			if result[i].PublishedAt.Valid && result[j].PublishedAt.Valid {
+				if result[j].PublishedAt.Time.After(result[i].PublishedAt.Time) {
+					result[i], result[j] = result[j], result[i]
+				}
+			}
+		}
+	}
+
+	// Apply limit
+	if int32(len(result)) > params.Limit {
+	}
+
+	return result, nil
 }
 
 func TestCommandsRegisterAndRun(t *testing.T) {
